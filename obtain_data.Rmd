@@ -1,0 +1,84 @@
+---
+title: "Finding GEO Expression Data"
+Date: "February 8, 2022"
+output: "None"
+author: "Abdula Maher"
+---
+
+Install the Bioconductor and GEOmetadb packages if they are not installed
+```{r}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+
+if (!requireNamespace("GEOmetadb", quietly = TRUE))
+  install.packages("GEOmetadb")
+
+library("BiocManager")
+library("GEOmetadb")
+```
+
+Obtain GEO data and save it as a SQL lite file in the working directory
+```{r}
+if(!file.exists('GEOmetadb.sqlite'))
+  getSQLiteFile()
+```
+
+Connect to the newly downloaded GEOmeta data database and examine the available tables
+```{r}
+con <- dbConnect(SQLite(), 'GEOmetadb.sqlite')
+
+geo_tables <- dbListTables(con)
+geo_tables
+```
+Run SQL queries and examine the data on GEO:
+(1) Look at the different technologies on GEO and highlight RNA-seq (classified under high-throughout sequencing)
+```{r}
+uniq_tech <- dbGetQuery(con, 'select distinct technology from gpl')
+mod_table <- cbind(uniq_tech[1:(nrow(uniq_tech)/2), 1],
+                   uniq_tech[((nrow(uniq_tech)/2)+1):nrow(uniq_tech),1])
+knitr::kable(mod_table, format = "html")
+```
+
+(2) Look at the names GEOmetadb at the technologies that are there for human studies
+```{r}
+num_uniq_tech_human <- dbGetQuery(con, ('select technology,count(*) as num_plat from gpl where organism = "Homo sapiens" group by technology order by num_plat desc'))
+colnames(num_uniq_tech_human)[2] <- "Num_Platforms"
+dim(num_uniq_tech_human)
+knitr::kable(num_uniq_tech_human, format = "html")
+```
+
+Find dataset of interest:
+RNA-seq data in AML in humans that was created in the last 5 years + specify for datasets with supplementary file (not a RAW file)
+```{r}
+sql <- paste("SELECT DISTINCT gse.title,gse.gse, gpl.title,",
+             "  gse.submission_date,",
+             "  gse.supplementary_file",
+             "FROM",
+             "   gse JOIN gse_gpl ON gse_gpl.gse=gse.gse",
+             "   JOIN gpl ON gse_gpl.gpl=gpl.gpl",
+             "WHERE",
+             "   gse.submission_date > '2017-01-01' AND",
+             "   gse.title LIKE '%Acute Myeloid Leukemia%' AND",
+             "   gpl.technology = 'high-throughput sequencing' AND",
+             "  gpl.organism = 'Homo sapiens'",
+             "order by gse.submission_date desc",
+             sep=" ")
+
+rs <- dbGetQuery(con, sql)
+
+count_files <- rs$supplementary_fule[grep(rs$supplementary_file,
+                                          pattern = "count",ignore.case = TRUE)]
+
+knitr::kable(rs[, 1:4], format = "html")
+```
+
+Series of interest = GSE128603 - Obtain data for the series of interest
+```{r}
+sfiles = getGEOSuppFiles('GSE128603')
+
+fnames = rownames(sfiles)
+
+b2 = read.delim(fnames[1],header=TRUE)
+head(b2)
+```
+
