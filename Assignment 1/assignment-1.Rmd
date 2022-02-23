@@ -1,0 +1,280 @@
+---
+title: "Assignmnet 1: Cleaning and Normalizing RNA-seq Data from GSE133112"
+author: "Abdula Maher"
+output: html_notebook
+---
+### Introduction
+**Control and Test Conditions of Dataset**
+
+The GSE133112 dataset contains RNA-seq results from a primary AML cell (AML37). These cells have been treated with a Bcl6 inhibitor, FX1, DMSO, or are not treated. There are 3 replicates per treatment groups. In this case, the DMSO and untreated samples are the control conditions and the FX1 treatment is the test condition.
+
+**Reason for Choosing GSE133112**
+
+Acute Myeloid Leukemia is one of the most deadly cancers and it is primarily treated using chemotherapy. As such, chemoresistance and refractory AML are significant problems for patients and are often markers for poor prognosis. Since I am completing a thesis course looking at protein markers for clonal hematopoiesis and AML, I was interested in learning more about the mechanisms of chemoresistance in AML.
+
+**Handling Replicated Genes and Mapping to HUGO Symbols**
+
+Fortunately, there were no expression values that could not be mapped to gene symbols since the dataset does not contain Ensembl gene IDs. Only gene symbols that appear to follow the HGNC standards are present. There were no empty rows either, suggesting the authors filtered the gene IDs prior to uploading. As such, I did not need to map any genes to HUGO symbols.
+
+There were no replicated genes. Only genes with a low count were removed following the edgeR reccomendations of removing genes with less than 1 million reads in 3 samples.
+
+**Final Dataset Coverage**
+
+The final coverage of the filtered dataset is 15,962 genes, down from 55857 genes in the raw count data.
+
+### Setup: Obtain and Store Dataset
+
+**Install the required packages, download the supplementary file, store it as a dataset, and visualize first 25 rows**
+
+1.1: The required packages are installed if they are not already installed. Next, the packages are loaded.
+```{r}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+
+if (!requireNamespace("GEOmetadb", quietly = TRUE))
+  install.packages("GEOmetadb")
+
+if (!requireNamespace("edgeR", quietly = TRUE))
+  install.packages("edgeR")
+
+if (!requireNamespace("ggplot2", quietly = TRUE))
+  install.packages("ggplot2")
+
+if (!requireNamespace("biomaRt", quietly = TRUE))
+  install.packages("biomaRt")
+
+library("BiocManager")
+library("GEOmetadb")
+library("edgeR")
+library("ggplot2")
+library("biomaRt")
+```
+
+
+1.2: The supplementary file containing unnormalized count data is downloaded from GEO if it is not already present in the working directory. The data is then loaded from the file and stored a data frame.
+```{r}
+if(!file.exists('./GSE133112/GSE133112_gene.counts.txt.gz')){
+  supp_files = getGEOSuppFiles('GSE133112')
+  file_names = rownames(supfiles)
+  raw_counts <- read.delim(file_names[1], header = TRUE, check.names = FALSE)} else{
+    raw_counts <- read.delim('./GSE133112/GSE133112_gene.counts.txt.gz')
+  }
+
+# display the first 25 rows of the data file
+knitr::kable(raw_counts[1:25,], format = "html")
+```
+
+\
+1.3: GEO Description of Dataset
+```{r}
+# code from lecture 4
+info <- getGEO("GSE133112", GSEMatrix=FALSE)
+knitr::kable(data.frame(head(Meta(info))), format = "html")
+```
+
+
+
+### Data Cleaning
+**Clean data by grouping samples into categories and remove low gene counts and duplicated genes**
+
+2.1: The raw, unfiltered dataset covers 55,857 genes. A new DataFrame "samples" is created to group the different samples by the replicate, cell type, and treatment method.
+FX1 - AML37 cells treated with FX1 (Bcl6 inhibitor) [test group]
+DMSO - AML37 cels treated with DMSO [ctrl]
+Negative - Untreated AML37 cells [ctrl]
+```{r}
+# code adapted from lecture 4
+dim(raw_counts)
+
+samples <- data.frame(lapply(colnames(raw_counts)[2:10],
+                             FUN=function(x){unlist(strsplit(x, split = "[.]"))[c(1,2,3)]}))
+colnames(samples) <- colnames(raw_counts)[2:10]
+rownames(samples) <- c("cells", "treatment", "replicate")
+samples <- data.frame(t(samples))
+
+knitr::kable(samples[], format = "html")
+```
+
+\
+2.2: Genes that have a very low count are not a good representation of differentially expressed genes. As such, following edgeR practices, genes with fewer than 1 read per million in n samples are removed, where n = 3 (3 replicates per sample). The coverage of the filtered is down to 15,962 genes, from 55,857 in the unfiltered dataset.
+```{r}
+# code from lecture 4
+counts_per_million = cpm(raw_counts[,2:10])
+rownames(counts_per_million) <- raw_counts[,1]
+
+keep = rowSums(counts_per_million > 1) >= 3
+filtered_counts = raw_counts[keep,]
+
+# compare the number of genes in the filtered versus unfiltered dataset
+count_comparison <- data.frame(data_type =c("unfiltered", "filtered"),
+                         num_genes=c(nrow(raw_counts), nrow(filtered_counts)))
+
+# plot a bar graph comparing the coverage
+ggplot(count_comparison, aes(x=data_type, y=num_genes)) +
+  geom_col() + geom_text(aes(label=num_genes), position=position_stack(vjust=0.5))
+```
+
+
+2.3: There are no duplicated genes in our dataset.
+```{r}
+# sort the frequency of reads of geneIDs to find replicates
+# code from lecture 4
+gene_counts <- sort(table(raw_counts$Geneid), decreading=TRUE)
+knitr::kable(gene_counts[1:5], format = "html")
+```
+
+
+\
+2.4: Gene mapping to HUGO: the dataset does not contain a column that lists the Ensembl IDs for genes. Instead, there is a single column called "Geneid", with gene symbols that follow the HUGO format. Since there are no rows without a specified Gene ID, it is probable that the authors filtered out replicates and genes with no ID prior to uploading the dataset.
+```{r}
+# check for any rows without a gene ID
+which(is.na(filtered_counts$Geneid) | filtered_counts$Geneid=="" | is.null(filtered_counts$Geneid))
+```
+
+
+
+### Data Normalization
+
+**Normalize the data by examining the distribution of genes, applying TMM normalization, and PCA analysis**
+
+3.1: The filtered count data is coverted into a DGEList object which is used by edgeR to store count data and contains parameters such as normalization factor and library size.
+```{r}
+filtered_counts_mtx <- as.matrix(filtered_counts[,2:10])
+rownames(filtered_counts_mtx) <- filtered_counts$Geneid
+
+dge_list = DGEList(counts=filtered_counts_mtx, group=samples$treatment)
+```
+
+
+3.1.1: The library size of the different samples are graphed. In our case, there are no extravagant differences in the library size, however, some variation is present that will be later corrected for.
+```{r}
+# adapted from Ballereau et al.
+barplot(dge_list$samples$lib.size, names=colnames(dge_list), las=2)
+title("Library size of AML37 treatment samples")
+```
+
+
+3.2: Apply the Trimmed Mean of M-values (TMM) method to normalize the raw, filtered data. TMM is chosen because it is an appropriate method for normalizing RNA-seq data and it will eliminate the composition bias of the dataset.
+```{r}
+# Normalize dataset
+dge_list= calcNormFactors(dge_list)
+
+# Create matrix of the normalized dataset
+norm_counts <- cpm(dge_list)
+norm_log_counts <- log2(norm_counts)
+```
+
+
+3.3: Performing a principal component analysis (PCA) between the samples treated with different compounds (FX1, DMSO, no treatment) and based on the multidimensional scaling (MDS) plot, we can observe that there is a clear difference between the samples treated with Bcl6 inhibitor, FX1, and the untreated and DMSO treated samples. 
+```{r}
+# code from lecture 4
+plotMDS(dge_list, labels=rownames(samples), 
+        xlab="Dimension 1", ylab="Dimension 2",
+        col = c("blue", "orange", "darkgreen")[factor(samples$treatment)])
+```
+
+
+3.4: The distribution of the data in a box plot shows the median Log2 CPM across the different treatment samples. It can be observed that our control groups (DMSO & Negative) have nearly identical means while our test group (FX1) has a slightly lower mean of Log2 CPM. Comparing the box plot of Log2 CPM before and after normalization, we can see that the Log2 CPM mean of the test samples (FX1 treated) is closer to the control samples (DMSO and untreated) than prior to normalization.
+```{r}
+# split the screen in 2 panels
+par(mfrow=c(1,2))
+
+# code from lecture 4
+# plot unnormalized box plot
+boxplot(log_counts, xlab = "samples", ylab = "log CPM",
+        col=c("lightblue", "lightblue", "lightblue", "lightgreen", "lightgreen", "lightgreen", "orange", "orange", "orange"),
+        las = 2, cex = 0.5, cex.lab = 0.5,
+        cex.axis = 0.5, main = "Log2 CPM of AML37 Treatment Samples (unnormalized)", cex.main = 0.6)
+
+abline(h = median(apply(log_counts, 2, median)),
+       col= "red", lwd = 0.6, lty = "dashed")
+
+# plot normalized box plot
+boxplot(norm_log_counts, xlab = "samples", ylab = "log CPM",
+        col=c("lightblue", "lightblue", "lightblue", "lightgreen", "lightgreen", "lightgreen", "orange", "orange", "orange"),
+        las = 2, cex = 0.5, cex.lab = 0.5,
+        cex.axis = 0.5, main = "Log2 CPM of AML37 Treatment Samples (normalized)", cex.main = 0.6)
+
+abline(h = median(apply(log_counts, 2, median)),
+       col= "red", lwd = 0.6, lty = "dashed")
+
+```
+
+
+3.5: Looking at the density plots, we can observe that our count data has a roughly normal distribution for the control groups (DMSO and Negative), whereas the desnity slightly dips for the test samples. Examining the density plot of Log2 CPM after normalization shows a slight rightwards shift for the test samples (FX1 treated).
+```{r}
+# split screen into 2 panels
+par(mfrow=c(1,2))
+
+# density plot code from lecture 4
+count_dens <- apply(log_counts, 2, density)
+
+xlim <- 0; ylim <- 0
+for (i in 1: length(count_dens)){
+  xlim <- range(c(xlim, count_dens[[i]]$x));
+  ylim <- range(c(ylim, count_dens[[i]]$y))
+}
+
+cols <- rainbow(length(count_dens))
+ltys <- rep(1, length(count_dens))
+
+plot(count_dens[[1]], xlim=xlim, ylim=ylim, type="n",
+     ylab="Density", xlab="log2-CPM",
+     main="Log2 CPM (unnormalized)", cex.lab = 0.85)
+
+for (i in 1:length(count_dens))
+  lines(count_dens[[i]], col=cols[i], lty=ltys[i])
+
+legend("topright", colnames(log_counts),
+       col=cols, lty=ltys, cex=0.3, text.col = "green4",
+       merge = TRUE)
+
+
+# plot normalized density plot
+norm_count_dens <- apply(norm_log_counts,
+                       2, density)
+
+xlim <- 0; ylim <- 0
+for (i in 1: length(norm_count_dens)){
+  xlim <- range(c(xlim, norm_count_dens[[i]]$x));
+  ylim <- range(c(ylim, norm_count_dens[[i]]$y))
+}
+
+cols <- rainbow(length(norm_count_dens))
+ltys <- rep(1, length(norm_count_dens))
+
+plot(norm_count_dens[[1]], xlim=xlim, ylim=ylim, type="n",
+     ylab="Density", xlab="log2-CPM",
+     main="Log2 CPM (normalized)", cex.lab = 0.85)
+
+for (i in 1:length(norm_count_dens))
+  lines(norm_count_dens[[i]], col=cols[i], lty=ltys[i])
+
+legend("topright", colnames(log_counts),
+       col=cols, lty=ltys, cex=0.3, text.col = "green4",
+       merge = TRUE)
+```
+
+### Final Result: Cleaned and Normalized Dataset
+
+The final result of this assignment is a dataframe with `r ncol(cleaned_data)` numeric columns that represent 3 treatment samples with 3 replicates.
+```{r}
+cleaned_data <- as.data.frame(norm_log_counts)
+head(cleaned_data)
+```
+### References
+Ballereau, S., Dunning, M., Rueda, O., &amp; Sawle, A. (2017, April 19). RNA-seq analysis in R. Bioinformatics. Retrieved February 23, 2022, from http://bioinformatics-core-shared-training.github.io/ 
+
+
+Chen Y, Lun AAT, Smyth GK (2016). “From reads to genes to pathways: differential expression analysis of RNA-Seq experiments using Rsubread and the edgeR quasi-likelihood pipeline.” F1000Research, 5, 1438. doi: 10.12688/f1000research.8987.2.
+
+
+Isserlin, R. (n.d.). Lecture 3 - Finding Expression Data. BCB420 - Computational Systems Biology.
+
+
+Isserlin, R. (n.d.). Lecture 4 - Exploring the data and the basics of normalization. BCB420 - Computational Systems Biology.
+
+
+Isserlin, R. (n.d.). Lecture 5 - Data exploration and identifier mapping. BCB420 - Computational Systems Biology.
+
+
+Rutter, L., Moran Lauter, A. N., Graham, M. A., &amp; Cook, D. (2019). Visualization methods for differential expression analysis. BMC Bioinformatics, 20(1). https://doi.org/10.1186/s12859-019-2968-1 
