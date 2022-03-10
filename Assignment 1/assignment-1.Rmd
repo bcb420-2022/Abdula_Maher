@@ -178,6 +178,8 @@ plotMDS(dge_list, labels=rownames(samples),
 # split the screen in 2 panels
 par(mfrow=c(1,2))
 
+log_counts <- log2(filtered_counts_mtx)
+
 # code from lecture 4
 # plot unnormalized box plot
 boxplot(log_counts, xlab = "samples", ylab = "log CPM",
@@ -194,7 +196,7 @@ boxplot(norm_log_counts, xlab = "samples", ylab = "log CPM",
         las = 2, cex = 0.5, cex.lab = 0.5,
         cex.axis = 0.5, main = "Log2 CPM of AML37 Treatment Samples (normalized)", cex.main = 0.6)
 
-abline(h = median(apply(log_counts, 2, median)),
+abline(h = median(apply(norm_log_counts, 2, median)),
        col= "red", lwd = 0.6, lty = "dashed")
 
 ```
@@ -260,6 +262,7 @@ The final result of this assignment is a dataframe with `r ncol(cleaned_data)` n
 ```{r}
 cleaned_data <- as.data.frame(norm_log_counts)
 head(cleaned_data)
+write.csv (cleaned_data, "norm_dataset.csv")
 ```
 ### References
 Ballereau, S., Dunning, M., Rueda, O., &amp; Sawle, A. (2017, April 19). RNA-seq analysis in R. Bioinformatics. Retrieved February 23, 2022, from http://bioinformatics-core-shared-training.github.io/ 
