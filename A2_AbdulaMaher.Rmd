@@ -1,0 +1,271 @@
+---
+title: 'Assignmnet 2: Differential Gene Expression Analysis and Preliminary ORA'
+author: "Abdula Maher"
+output:
+  html_document:
+    toc: yes
+    df_print: paged
+  html_notebook:
+    toc: yes 
+---
+
+### Introduction
+The GSE133112 dataset was downloaded from GEO using the GEOmetadb package. It was filtered for read counts and normalized using the TMM method. The dataset contains RNA-seq results from primary AML cells (AML37) treated with a BCL6 inhibitor (FX1), or DMSO and not treated samples as controls.
+
+
+### Setup: Call Packages and Source Data
+**Install the required packages and source the required data from Assignment 1**
+
+1.1: The required packages are installed if they are not already present. Next, all of the packages that will be used subsuquently are loaded.
+```{r message=FALSE, warning=FALSE}
+if (!requireNamespace("ComplexHeatmap", quietly = TRUE))
+  install.packages("ComplexHeatmap")
+
+if (!requireNamespace("circlize", quietly = TRUE))
+  install.packages("circlize")
+
+if (!requireNamespace("edgeR", quietly = TRUE))
+  install.packages("edgeR")
+
+if (!requireNamespace("gprofiler2", quietly = TRUE))
+  install.packages("gprofiler2")
+
+if (!requireNamespace("ggplot2", quietly = TRUE))
+  install.packages("ggplot2")
+
+if (!requireNamespace("ggrepel", quietly = TRUE))
+  install.packages("ggrepel")
+
+suppressPackageStartupMessages(library(ComplexHeatmap))
+suppressPackageStartupMessages(library(circlize))
+suppressPackageStartupMessages(library(edgeR))
+suppressPackageStartupMessages(library(gprofiler2))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(ggrepel))
+```
+
+
+1.2: The variables from Assignment-1 are knitted as they will be used for subsuquent analyses.
+```{r message=FALSE, warning=FALSE, include=FALSE}
+# knit variables from A1
+options(knitr.duplicate.label = "allow")
+res <- knitr::knit_child(file.path('assignment-1.Rmd'))
+```
+
+### Differential Gene Expression
+**Conduct differential gene expression using the exactTest method, perform multiple hypothesis testing, and visualize top hits**
+
+2.1: The normalized data is modified to remove NULL values.
+```{r}
+# modify the normalized dataset to account for NULL values taken for gene with an expression 0
+norm_data <- as.data.frame(log2(norm_counts + 1))
+norm_data <- tibble::rownames_to_column(norm_data, "Geneid")
+```
+
+2.2: The normalized data is classified by the different treatment samples which will be used for our comparison. In addition, edgeR assumes that the gene expression dataset follows a negative binomial distribution. Here, we confirm that our data fulfills that assumption. The blue line shows the mean-varaince relationship for a negative bionomial model which our data follows. As our data only differs by treatment method, treatment will be used to specify the model matrix.
+```{r message=FALSE, warning=FALSE}
+# classify the different treatment samples into a dataframe
+# code adapted from lecture 6
+samples <- data.frame(
+  lapply(colnames(norm_data)[2:10], FUN=function(x){
+    unlist(strsplit(x, split = "\\."))[c(2)]}))
+
+colnames(samples) <- colnames(norm_data)[2:10]
+rownames(samples) <- c("treatment")
+
+samples <- data.frame(t(samples))
+
+# create a model matrix with our treatment types
+model_design <- model.matrix(~ samples$treatment)
+
+# convert the filtered dataset into a DGEList object which is used by edgeR
+dge_obj <- DGEList(counts = filtered_counts_mtx, group=samples$treatment)
+dge_obj <- estimateDisp(dge_obj, model_design)
+
+# plot the mean variance of the filtered dataset to confirm its binomial distribution
+plotMeanVar(dge_obj, show.raw.vars = FALSE,
+            show.tagwise.vars = FALSE, NBline = TRUE,
+            show.binned.common.disp.vars = TRUE)
+```
+
+
+2.2: The dataset is normalized and differential gene expression is calculated using the exactTest method. The edgeR package was used since it is designed for RNA-seq data and exactTest is an appropriate method for dealing with data from simple and controlled studies like ours. The differential expression results are then adjusted for multiple hypothesis testing using the Bejamin Hochberg method. The BH method is widely used in RNA-seq analysis.
+```{r}
+# normalize dataset
+dge_obj <- calcNormFactors(dge_obj)
+
+# conduct differential expresion analysis using exactTest
+hits <- exactTest(dge_obj, dispersion = 0.2)
+
+# conduct multiple hypothesis correction using the Benjamin Hochberg method
+AdjPValue <- p.adjust(hits$table$PValue, method = "BH")
+
+# add the adjusted P values from BH method to the differential expression data frame
+hits <- as.data.frame(hits)
+hits$AdjPValue <- AdjPValue
+```
+
+Now, 3571 genes pass the significance threshold of p < 0.0001 and 2871 genes pass the significance threshold after multiple hypothesis correction.
+
+2.3: The significantly upregulated and downregulated genes are visualized and labeled in the volcano plot. HMOX1, a gene that is involved in the oxidative stress response is found to be significantly upregulated, which are normally repressed by BCL6. Also, among the downregulated genes, we observe MEIS1, which is highlighy expressed in hematopoeitc stem cells and represses myeloid differentiation.
+```{r message=FALSE, warning=FALSE}
+# create a new dataframe with the differential expression analysis
+volcano_diff_exp <- hits
+
+# add a column for Geneid
+volcano_diff_exp <- tibble::rownames_to_column(hits, "Geneid")
+
+# classify whether each gene is significantly expressed based on a threshold p value < 0.001
+volcano_diff_exp$diffexpressed <- "No change"
+volcano_diff_exp$diffexpressed[volcano_diff_exp$logFC > 5 & volcano_diff_exp$AdjPValue < 0.00001] <- "Increase"
+volcano_diff_exp$diffexpressed[volcano_diff_exp$logFC < -5 & volcano_diff_exp$AdjPValue < 0.00001] <- "Decrease"
+
+# plot the volcano plot
+ggplot(data=volcano_diff_exp, aes(x=logFC, y=-log10(AdjPValue), col=diffexpressed)) +
+  geom_point() +
+  theme_light () +
+  theme(plot.title = element_text(hjust = 0.5, size = 10),
+        legend.title=element_text(size = 9, face="bold")) +
+  scale_color_manual(values=c("blue", "red", "black" )) +
+  geom_hline(yintercept = -log10(0.00001), col="black", linetype = "dashed") +
+  geom_vline(xintercept = c(-5, 5), col="black", linetype = "dashed") +
+  labs(title = "Differentially Expressed Genes in FX1 treatment vs. Untreated AML Cells", x = "Fold Change (log2)", y = "Significance (-log10AdjPValue)", color = "Change in Gene Expression") +
+  geom_label_repel(size = 2, data=subset(volcano_diff_exp, logFC > 8 | logFC < -9 | -log10(AdjPValue) > 21), aes(label=Geneid), nudge_y = 1, nudge_x = 1)
+```
+
+
+2.4: Based on the heatmap visualization of our data, it can clearly be seen that the FX1 treatment samples have a significant change in gene expression in comparison to the control groups.
+```{r}
+# create a numerical matrix which will be used to create a heatmap
+heatmap_mtx <- as.matrix(norm_data[,2:ncol(norm_data)])
+
+# add row and coloumn names to matrix
+rownames(heatmap_mtx) <- norm_data$Geneid
+colnames(heatmap_mtx) <- colnames(norm_data[,2:ncol(norm_data)])
+
+# code adapted from lecture 6
+heatmap_mtx[is.infinite(heatmap_mtx)] = 0
+
+# row normalization
+heatmap_mtx <- t(scale(t(heatmap_mtx)))
+
+# plot heatmap
+Heatmap(heatmap_mtx, column_title = "Differential Gene Expression in AML Cells", show_row_dend = TRUE, show_column_dend = TRUE, show_column_names = TRUE, show_row_names = FALSE, heatmap_legend_param = list(title = "Change in Expression"), show_heatmap_legend = TRUE)
+```
+
+2.5: The heatmap for the genes that pass the p < 0.0001 threshold shows an even more significant patterning of gene expression on the basis of treatment (FX1) or no treatment (DMSO and Negative).
+```{r}
+# create hits data frame with gene names as coloumns
+hits_gn <- hits
+hits_gn <- tibble::rownames_to_column(hits, "Geneid")
+
+# create a list of genes that pass the significance threshold of p < 0.0001
+top_hits <- hits_gn$Geneid[hits_gn$PValue < 0.0001]
+
+# create a numerical matrix which will be used to create heatmap using top gene hits
+heatmap_mtx_hits <- subset(heatmap_mtx, rownames(heatmap_mtx) %in% top_hits)
+
+# row normalization
+heatmap_mtx_hits <- t(scale(t(heatmap_mtx_hits)))
+
+# plot heatmap
+Heatmap(heatmap_mtx_hits, column_title = "Differential Gene Expression in AML Cells (p<0.0001)", show_row_dend = TRUE, show_column_dend = TRUE, show_column_names = TRUE, show_row_names = FALSE, heatmap_legend_param = list(title = "Change in Expression"), show_heatmap_legend = TRUE)
+```
+
+
+### Threshold Over-representation Analysis
+**Perform an over-representation analysis using g:Profiler and visualize enriched pathways**
+
+3.1: A list of upregulated and downregulated genes that pass the threshold of p<0.0001 will be used in our downstream pathway enrichment analysis.
+```{r}
+# rank the differentially expressed genes based on p value and fold change
+hits_gn[, "rank"] <- -log(hits_gn$PValue, base=10) * sign(hits_gn$logFC)
+hits_gn <- hits_gn[order(hits_gn$rank),]
+
+# create a list of upregulated and downregulated genes that pass the threshold of p < 0.0001
+upregulated_genes <- hits_gn$Geneid[which(hits_gn$PValue < 0.001 & hits_gn$logFC > 0)]
+downregulated_genes <- hits_gn$Geneid[which(hits_gn$PValue < 0.001 & hits_gn$logFC < 0)]
+```
+
+3.2: Interactive Manhattan plot of the most significantly upregulated pathways using g:Profiler shows a range of pathways that are elevated in our treatment samples. gProfiler was used since we have worked with it in class, it has a robust annotation dataset, and its widespread use with RNA-seq analyses.
+
+Note: the gost method does not have parameters for a title or a legend.
+```{r message=FALSE, warning=FALSE}
+# obtain the upregulated pathways from g:profiler on homo sampien genes
+upreg_ora <- gost(query = upregulated_genes, organism = "hsapiens", ordered_query = TRUE)
+
+# modify the results file to only show pathways with counts that are less than 250 and greater than 5
+upreg_ora$result <- subset(upreg_ora$result, upreg_ora$result$term_size < 250 & upreg_ora$result$term_size > 5)
+
+# plot the upregualted pathways
+gostplot(upreg_ora, capped = FALSE, interactive = TRUE)
+```
+
+3.3: Interactive Manhattan plot of the most significantly upregulated pathways using g:Profiler shows a range of pathways that are elevated in our treatment samples. Using the upregulated and downregulated lists separately allowed for clear comparison of the different pathways in their respective contexts.
+```{r message=FALSE, warning=FALSE}
+# obtain the downregulated pathways from g:profiler on homo sampien genes
+downreg_ora <- gost(query = downregulated_genes, organism = "hsapiens", ordered_query = TRUE)
+
+# modify the results file to only show pathways with counts that are less than 250 and greater than 5
+downreg_ora$result <- subset(downreg_ora$result, downreg_ora$result$term_size < 250 & downreg_ora$result$term_size > 5)
+
+# plot the downregulated pathways
+gostplot(downreg_ora, capped = FALSE, interactive = TRUE)
+```
+
+177 upregulated gene sets and 101 downregulated gene sets were returned with threshold values of >5 and <250.
+
+
+3.4: The top 5 upregulated pathways in GO: biological process show that the treatment samples have an increase in genes that regulate macroautophagy, responses to incorrect and misfolded proteins, and regulation of RNA splicing. The results are to be expected as FX1 is an inhibitor of Bcl6, a transcription repressor. Therefore, treatment of AML cells with Fx1 would decrease the inhibition of transcription, and as a result, lead to an increase in RNA splicing, protein modificaitons, and response to unfolded proteins. This is because with decreased transcriptional regulation, more mutated mRNA and proteins may be produced. Also, macroautophagy functions as a mechanism of clearing cellular debris, and therefore, it may be upregulated in response to the accumulation of mRNA transcripts and proteins. GO:BP was used because of its robust results and expansive database.
+```{r fig.height=2, fig.width=10, message=FALSE, warning=FALSE}
+publish_gosttable(upreg_ora, highlight_terms = upreg_ora$result[c(1:5),], use_colors = TRUE, show_columns = c("source", "term_name", "term_size"), filename = NULL)
+```
+
+3.5: Although the reuslts of the top 5 downregulated pathways in the FX1 treatment samples are less explicit, BCL6 inhibition reduces the proliferative advantage of AML cells and reduces its stem nature (Kawabata, 2021). As such, the downregulation of the pyrimidine metabolsim and ribosomal subunit biogenesis pathway points to a decrease in cellular proliferation, which is in line with our expectations.
+```{r fig.height=2, fig.width=10, message=FALSE, warning=FALSE}
+publish_gosttable(downreg_ora, highlight_terms = downreg_ora$result[c(1:5),], use_colors = TRUE, show_columns = c("source", "term_name", "term_size"), filename = NULL)
+```
+
+
+### Data Interpretation
+
+**Do the over-representation results support conclusions or mechanisms discussed in the original paper?**
+
+The overrepresenation results provide a mixed signal with reference to the coclusion reached in the original paper. The authors of the paper argue that BCL6 is a transcription repressor and it's overexpression mediates chemoresistnace in AML. However, when AML cells are treated with FX1, a BCL6 inhibitor, HMOX1, a gene involved in the oxidative stress response, is upregulated. Since high levels of reactive oxygen species (ROS) are a hallmark of proliferating cancer cells, increased HMOX1 levels suggest a more proliferative function (Chou, 2015, Hoang et al., 2021). Therefore, an increase in HMOX1 in BCL6 treated cells does not support the argument of targeting BCL6 to overcome chemoresistant AML cells. On the other hand, overexpression of CASP12, which initiated the proapoptotic caspase cascade, points to the fact that BCL6 treated tumor cells are more prone to dying, which supports the author's conclusions. Also, TNFSF18, which is upregulated in FX1 treated samples has been shown to promote cellular differentiation, a key goal in overcoming the proliferation of blasts that are observed in AML.
+
+
+**Can you find evidence, i.e. publications to support some of the results you see? How does this paper support your results?**
+
+CASP12 is a regulator of the caspase cascade that is involved in mediation apoptosis. In their study in carcinoma cells, Chow et al. highlight that human caspase 12 enhances the activity of the NFkappaB pathway, which is a pro-inflammatory pathway that is desired in tumor immunotherapy (Chow et al., 2021). In addition, a leukemia study investigating the role of ALBL1, a tumor suppressor, found the expression of CASP12 to be correlated with increased tumor suppression and found that CASP12 was found downregulated in ALB1-/- cells (Dasgupta et al., 2016).  
+
+### References
+Chau, LY. Heme oxygenase-1: emerging target of cancer therapy. J Biomed Sci 22, 22 (2015). https://doi.org/10.1186/s12929-015-0128-0
+
+Chow, S. E., Chien, H. T., Chu, W. K., Lin, V., Shen, T. H., & Huang, S. F. (2021). Human Caspase 12 Enhances NF-κB Activity through Activation of IKK in Nasopharyngeal Carcinoma Cells. International journal of molecular sciences, 22(9), 4610. https://doi-org.myaccess.library.utoronto.ca/10.3390/ijms22094610
+
+Dasgupta, Y., Koptyra, M., Hoser, G., Kantekure, K., Roy, D., Gornicka, B., Nieborowska-Skorska, M., Bolton-Gillespie, E., Cerny-Reiterer, S., Müschen, M., Valent, P., Wasik, M. A., Richardson, C., Hantschel, O., van der Kuip, H., Stoklosa, T., & Skorski, T. (2016). Normal ABL1 is a tumor suppressor and therapeutic target in human and mouse leukemias expressing oncogenic ABL1 kinases. Blood, 127(17), 2131–2143. https://doi-org.myaccess.library.utoronto.ca/10.1182/blood-2015-11-681171
+
+Gu, Z. (2014) circlize implements and enhances circular visualization 
+in R. Bioinformatics.
+
+Gu, Z. (2016) Complex heatmaps reveal patterns and correlations in multidimensional genomic data. Bioinformatics.
+
+H. Wickham. ggplot2: Elegant Graphics for Data Analysis. Springer-Verlag New York, 2016.
+
+Isserlin, R. (n.d.). Lecture 6 - Differential Expression. BCB420 - Computational Systems Biology.
+
+Isserlin, R. (n.d.). Lecture 7 - Annotation Dataset and Intro to Pathway analysis. BCB420 - Computational Systems Biology.
+
+Kamil Slowikowski (2021). ggrepel: Automatically Position Non-Overlapping Text Labels with 'ggplot2'. R package version 0.9.1. https://github.com/slowkow/ggrepel
+
+Kawabata, K. C., Zong, H., Meydan, C., Wyman, S., Wouters, B. J., Sugita, M., Goswami, S., Albert, M., Yip, W., Roboz, G. J., Chen, Z., Delwel, R., Carroll, M., Mason, C. E., Melnick, A., & Guzman, M. L. (2021). BCL6 maintains survival and self-renewal of primary human acute myeloid leukemia cells. Blood, 137(6), 812–825. https://doi.org/10.1182/blood.2019001745
+
+Kolberg L, Raudvere U, Kuzmin I, Vilo J, Peterson H (2020). “gprofiler2- an R package for gene list functional enrichment analysis and
+namespace conversion toolset g:Profiler.” _F1000Research_, *9 (ELIXIR)*(709). R package version 0.2.1.
+
+Luu Hoang, K. N., Anstee, J. E., & Arnold, J. N. (2021). The Diverse Roles of Heme Oxygenase-1 in Tumor Progression. Frontiers in immunology, 12, 658315. https://doi-org.myaccess.library.utoronto.ca/10.3389/fimmu.2021.658315
+
+Moisan, A., Gonzales, I., &amp; Villa-Vialaneix, N. (2014, December 10). Practical statistical analysis of RNA-Seq data - edgeR. Practical statistical analysis of RNA-seq data - edger. Retrieved March 15, 2022, from http://www.nathalievialaneix.eu/doc/html/solution-edgeR-rnaseq.html 
+
+Robinson MD, McCarthy DJ and Smyth GK (2010). edgeR: a Bioconductor package for differential expression analysis of digital gene
+  expression data. Bioinformatics 26, 139-140
