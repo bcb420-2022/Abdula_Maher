@@ -1,0 +1,204 @@
+---
+title: "Assignment 3: Dataset Pathway and Network Analysis"
+author: "Abdula Maher"
+output: 
+  html_notebook:
+    toc: yes
+---
+
+## Introduction
+The GSE133112 dataset was downloaded from GEO using the GEOmetadb package. The dataset contains RNA-seq results from primary AML cells (AML37) treated with a BCL6 inhibitor (FX1), or DMSO and not treated samples as controls. It was filtered for read counts and normalized using the TMM method. Previously, differential gene expression analysis using the exactTest method and an overrepresentation analysis was perfomred to visualize the top gene hits (2871 genes at p < 0.0001) in the FX1 treatment vs. untreated groups.
+
+## Setup: Call Packages and Source Data
+
+**Install the required packages and source the required data from Assignment 1**
+
+1.1: The required packages are installed if they are not already present. Next, all of the packages that will be used subsequently are loaded.
+```{r message=FALSE, warning=FALSE}
+if (!requireNamespace("ComplexHeatmap", quietly = TRUE))
+  install.packages("ComplexHeatmap")
+
+if (!requireNamespace("circlize", quietly = TRUE))
+  install.packages("circlize")
+
+if (!requireNamespace("edgeR", quietly = TRUE))
+  install.packages("edgeR")
+
+if (!requireNamespace("gprofiler2", quietly = TRUE))
+  install.packages("gprofiler2")
+
+if (!requireNamespace("ggplot2", quietly = TRUE))
+  install.packages("ggplot2")
+
+if (!requireNamespace("ggrepel", quietly = TRUE))
+  install.packages("ggrepel")
+
+if (!requireNamespace("RCurl", quietly = TRUE))
+  install.packages("RCurl")
+
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+
+if (!requireNamespace("RCy3", quietly = TRUE))
+  install.packages("RCy3")
+
+suppressPackageStartupMessages(library(ComplexHeatmap))
+suppressPackageStartupMessages(library(circlize))
+suppressPackageStartupMessages(library(edgeR))
+suppressPackageStartupMessages(library(gprofiler2))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(ggrepel))
+suppressPackageStartupMessages(library(RCurl))
+suppressPackageStartupMessages(library(BiocManager))
+suppressPackageStartupMessages(library(RCy3))
+```
+
+1.2 The variables from Assignment-2 are knitted as the ranked file will be used for downstream analyses.
+```{r message=FALSE, warning=FALSE, include=FALSE}
+options(knitr.duplicate.label = "allow")
+res <- knitr::knit_child(file.path('A2_AbdulaMaher.Rmd'))
+```
+
+
+## Non-Thresholded Gene Set Enrichment Analysis
+
+**What method did you use? What genesets did you use?**
+
+I used Gene Set Enrichment Analysis that is avaialble through the GSEA Java software and the enrichment map protocol pipeline from the Bader Lab (Isserlin, 2020). I used the human gene set available from the Bader Lab.
+
+2.1 An updated geneset file is obtained from the Bader Lab and stored in the working directory. This file will be used in the GSEA.
+```{r message=FALSE, warning=FALSE}
+# code adapted from lecture 10
+gmt_url = "http://download.baderlab.org/EM_Genesets/current_release/Human/symbol/"
+
+# list all the files on the server
+filenames = getURL(gmt_url)
+tc = textConnection(filenames)
+contents = readLines(tc)
+close(tc)
+
+# get the gmt that has all the pathways and does not include terms inferred
+# from electronic annotations(IEA) start with gmt file that has pathways only
+rx = gregexpr("(?<=<a href=\")(.*.GOBP_AllPathways_no_GO_iea.*.)(.gmt)(?=\">)", contents,
+    perl = TRUE)
+
+# set to current working directory
+data_dir = "/home/rstudio/projects"
+
+gmt_file = unlist(regmatches(contents, rx))
+dest_gmt_file <- file.path(data_dir, gmt_file)
+download.file(paste(gmt_url, gmt_file, sep = ""), destfile = dest_gmt_file)
+```
+
+2.2: The ranked list created in Assignmnent-2 is stored as a .rnk file in the working directory.
+```{r message=FALSE, warning=FALSE}
+write.table(x=data.frame(genename = hits_gn$Geneid, F_stat=hits_gn$rank),
+            file=file.path("/home/rstudio/projects", "expression.rnk"), sep ="\t",
+            row.names = FALSE, col.names = FALSE, quote = FALSE)
+```
+
+2.3: GSEA is performed on the ranked gene set using the enrichment map protocol pipeline from the Bader Lab (Isserlin, 2020). The following parameters were specified. 1000 permuations were run.
+
+The following code was run on the GSEA Docker (risserlin/em_base_image).
+```{undefined message=FALSE, warning=FALSE}
+#rnk <- read.table("fx1_ranked_genelist.txt", sep = "\t", header=TRUE)
+
+#write.table(rnk, file="expression.rnk", quote=FALSE, sep="\t", row.names=FALSE)
+
+# specify the java_version
+#run_gsea <- TRUE
+#java_version = "11"
+
+# set the location of the GSEA java file and specifiy the working directory
+#gsea_jar <- "/home/rstudio/GSEA_4.1.0/gsea-cli.sh"
+#working_dir <- "/home/rstudio/projects"
+
+# specify the ranked and output analysis file
+#rnk_file <- "expression.rnk"
+#analysis_name <- "A3_FX1_Results"
+
+# run GSEA
+#if(run_gsea && java_version == "11"){
+#  command <- paste("",gsea_jar,  "GSEAPreRanked -gmx", dest_gmt_file, "-rnk" ,file.path(working_dir,rnk_file), "-collapse false -nperm 1000 -scoring_scheme weighted -rpt_label ",analysis_name,"  -plot_top_x 20 -rnd_seed 12345  -set_max 200 -set_min 15 -zip_report false -out" ,working_dir, " > gsea_output.txt",sep=" ")
+#  system(command)
+#} else if (run_gsea) {
+#  command <- paste("java  -Xmx1G -cp",gsea_jar,  "xtools.gsea.GseaPreranked -gmx", dest_gmt_file, "-rnk" ,file.path(working_dir,rnk_file), "-collapse false -nperm 1000 -permute gene_set -scoring_scheme weighted -rpt_label ",analysis_name,"  -num 100 -plot_top_x 20 -rnd_seed 12345  -set_max 200 -set_min 15 -zip_report false -out" ,working_dir, "-gui false > gsea_output.txt",sep=" ")
+#  system(command)
+#}
+```
+
+**Summary of Enrichment Results**
+
+2.4: The top upregulated pathway and their FDR q-value are shown from the GSEA.
+```{r message=FALSE, warning=FALSE}
+gsea_file <- list.files(path = getwd(), pattern = "\\.GseaPreranked")
+
+# read the top positively and negatively regulated genes from the GSEA
+pos_results <- list.files(path = file.path(getwd(), gsea_file[1]), pattern = "gsea_report_for_na_pos.*.tsv")
+neg_results <- list.files(path = file.path(getwd(), gsea_file[1]), pattern = "gsea_report_for_na_neg.*.tsv")
+pos_results <- read.table(file = file.path(getwd(), gsea_file[1], pos_results), header = TRUE, sep = "\t", fill = TRUE, stringsAsFactors = FALSE)
+neg_results <- read.table(file = file.path(getwd(), gsea_file[1], neg_results), header = TRUE, sep = "\t", fill = TRUE, stringsAsFactors = FALSE)
+
+# show the top upreguated gene sets after FX1 treatment
+columns_to_show <- c("NAME", "SIZE", "ES", "NES", "FDR.q.val", "LEADING.EDGE")
+knitr::kable(head(pos_results[, columns_to_show]), caption = "Table 1: Top Upregulated Gene Sets after FX1 Treatment")
+```
+
+2.5: The top downregulated pathway and their FDR q-value are shown from the GSEA.
+```{r}
+knitr::kable(head(neg_results[, columns_to_show]), caption = "Table 2: Top Donwregulated Gene Sets after FX1 Treatment")
+```
+
+**Non-thresholded analysis vs. thersholded analysis from Assignment 2**
+
+There are some noticeable differences between the GSEA results and the thresholded analysis. First, by specifying a threshold value, the gene pathway results were limited to a smaller cohort of genes. As such, while the top upregulated genes using a threshold ORA were regulation of macroautophagy and response to poorly folded and unfolded proteins, in the GSEA, the top upregualted gene sets are regulation of transcription and response to heat. They both do share the upregulation of the authopahgy pathway, with authophagosome assembly being upregulated in GSEA.
+
+The same can be said for downregulated genes, where the threshold ORA had rRNA processing and nucleoside metabolism as top hits, whereas GSEA has MYC targets, and immunoregulatory interactions, along with pyrimidine metabolism. In short, GSEA has more diverse gene sets that are significantly regulated, whereas the threshold ORA is more focused.
+
+## Visulization of Gene Set Enrichment Analysis in Cytoscape
+
+The following analysis was performed in Cytoscape, following the referenced pipleline (Reimand & Isserlin et al).
+
+![3.1: Cytoscape Enrichment Map](/home/rstudio/projects/A3_figures/A3_FX1_EnrichmentMap.png)
+There are 219 nodes, which represent gene sets, and 324 edges, representing the number of genes that are common between the gene sets. A node cutoff value of 0.1 (Q-Value) was used and an edge cutoff valye of 0.375 was used.
+
+![Annotated Enrichment Map](/home/rstudio/projects/A3_figures/A3_FX1_Publish_Figure.png)
+The annotated and publishable enrichment map above was manually annotated with red nodes representing upregulated pathway and blue nodes representing downregulated pathways following FX1 treatment. I manually annotated nodes that were large and had a significant function in relation to the experiments performed. The same parameters as described above were kept.
+
+![Theme Network](/home/rstudio/projects/A3_figures/A3_FX1_Themes.png)
+The major themes in the network were identified using AutoAnnotate in Cytoscape (Kucera et al., 2016). The MCL Cluster algorthim was used and then the clusters were manually adjusted to highlight the most significant themes. As seen above, some major themes are carried over from our threshold ORA and GSEA, such as the response to incorrectly folded proteins. In addition, cell death networks like apoptosis and autophagy and cellular degerneartion pathways are also seen, which is within the context of the experiments conducted, as FX1 treatment leads to AML cell death. Some additional themes have been identified, such as pdgfr and fgfr3 pathways which will require further analysis.
+
+## Interpretation and Detailed View of Results
+
+**Do the enrichment results support conclusions or mechanisms discussed in the original paper (and supporting evidence)?**
+
+As was the case with the threshold ORA, the enrichment are in line with the findings of the original paper, but do not go all way. For instance, the paper identified BCL6 as a mediator of chemoresistance in AML cells, however, BCL6 expression is related to ROS modulation and apoptosis (Kurosu et al., 2003). In our case, we observed significant upregulation in the various authophagy pathways along with the TLR8 pathway. In addition, the TLR7/8 pathway could indicate the mechanisms by which FX1 treated AML cells become sensitive to treatment, as T-Cell response might lead to increased TLR signaling and a combined autophagic/apoptotic mechanism of cell death (Lin et al., 2019).
+
+In comparison to the thresholded methods, these results provide a greater picture into the mechanisms that may be occuring, and thus, providing more future points of research and intervention as well.
+
+**TRAF6-Myd88 Dependent TLR Pathway in Greater Detail**
+![TRAF6 NFkB Pathway](/home/rstudio/projects/A3_figures/A3_TRAF6.png)
+The figure above, obtained from Reactome Pathway viewer, showcases the induction of the TRAF6/NFkB pathway from the Toll-like receptors 7 and 8.
+
+![TRAF6 Signalling](/home/rstudio/projects/A3_figures/A3_TRAF6_zoomed.png)
+The zoomed in view highlights how TRAF6 interacts with the IRAK pathways for downstream cellular signaling.
+
+![TRAF6 Pathway Map](/home/rstudio/projects/A3_figures/TRAF6-genemania.png)
+The figure above was created using GeneMANIA, where the the genes that interact with TRAF6 and are found in the leading edge are mapped. Most of the upregulated genes (darker red) are found in the NFkB signalling pathway, indicating a role in the maintenance of chemoresistnace. This is especially intriguing as a recent study showed that disregultion in the TRAF6 signaling pathway can promote clonal hematopoiesis of indeterminate potential, a pre-leukemic condition that allows clones of hematopoietic stem cells to develop into hematological malignancies (Muto et al., 2022).
+
+## References
+
+Isserlin, R. (n.d.). Enrichment Map Analysis Pipeline. Bader Lab GitHub.
+
+Isserlin, R. (n.d.). Lecture 10 - Recap and GSEA. BCB420 - Computational Systems Biology.
+
+Isserlin, R. (n.d.). Lecture 11 - Enrichment Mao and other Cytoscpae Apps. BCB420 - Computational Systems Biology.
+
+Kucera, M., Isserlin, R., Arkhangorodsky, A., &amp; Bader, G. D. (2016). AutoAnnotate: A Cytoscape app for summarizing networks with Semantic Annotations. F1000Research, 5, 1717. https://doi.org/10.12688/f1000research.9090.1 
+
+Kurosu, T., Fukuda, T., Miki, T., &amp; Miura, O. (2003). BCL6 overexpression prevents increase in reactive oxygen species and inhibits apoptosis induced by chemotherapeutic reagents in B-cell lymphoma cells. Oncogene, 22(29), 4459–4468. https://doi.org/10.1038/sj.onc.1206755 
+Lin, C.-T., Hsieh, Y.-T., Yang, Y.-J., Chen, S.-H., Wu, C.-H., &amp; Hwang, L.-H. (2019). B-cell lymphoma 6 (BCL6) is a host restriction factor that can suppress HBV gene expression and modulate immune responses. Frontiers in Microbiology, 9. https://doi.org/10.3389/fmicb.2018.03253 
+
+Muto, T., Guillamot, M., Yeung, J., Fang, J., Bennett, J., Nadorp, B., Lasry, A., Redondo, L. Z., Choi, K., Gong, Y., Walker, C. S., Hueneman, K., Bolanos, L. C., Barreyro, L., Lee, L. H., Greis, K. D., Vasyliev, N., Khodadadi-Jamayran, A., Nudler, E., … Starczynowski, D. T. (2022). TRAF6 functions as a tumor suppressor in myeloid malignancies by directly targeting MYC oncogenic activity. Cell Stem Cell, 29(2). https://doi.org/10.1016/j.stem.2021.12.007 
+
+Reimand, J., Isserlin, R., Voisin, V., Kucera, M., Tannus-Lopes, C., Rostamianfar, A., Wadi, L., Meyer, M., Wong, J., Xu, C., Merico, D., &amp; Bader, G. D. (2019). Pathway enrichment analysis and visualization of OMICS data using G:Profiler, GSEA, Cytoscape and EnrichmentMap. Nature Protocols, 14(2), 482–517. https://doi.org/10.1038/s41596-018-0103-9 
